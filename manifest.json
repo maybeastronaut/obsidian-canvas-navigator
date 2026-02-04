@@ -1,0 +1,10 @@
+{
+	"id": "obsidian-compass-graph",
+	"name": "Canvas Context Navigator",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "集成面包屑导航与白板逆向索引. 支持将笔记智能插入白板, 并实现修改内容后的白板卡片自动同步与尺寸自适应, 始终保持完美贴合.",
+	"author": "Me",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}
