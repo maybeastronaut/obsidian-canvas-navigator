@@ -1,4 +1,4 @@
-/* --- Canvas Navigator Styles --- */
+/* --- Canvas Navigator Styles (面包屑导航栏) --- */
 
 .nav-header-wrapper {
     width: 100%;
@@ -55,6 +55,8 @@
     font-size: 12px;
 }
 
+/* --- Navigation Buttons (上一篇/下一篇) --- */
+
 .nav-buttons-row {
     width: 100%;
     display: flex;
@@ -106,7 +108,7 @@
     max-width: 100%;
 }
 
-/* --- Canvas Modal Styles --- */
+/* --- Canvas Reference Modal (引用查询弹窗) --- */
 
 .canvas-ref-modal .modal-content {
     padding-top: 10px;
@@ -138,6 +140,11 @@
     opacity: 0.8;
 }
 
+/* 修复 ESLint: 用于潜在引用图标的颜色，替代 style.color */
+.potential-ref {
+    color: var(--text-accent);
+}
+
 .canvas-ref-name {
     font-weight: 500;
     font-size: 15px;
@@ -163,7 +170,8 @@
     border: 1px dashed var(--text-muted);
 }
 
-/* --- Measurement Helper Styles (Replaces inline styles) --- */
+/* --- Measurement Helper Styles (文本测量辅助类) --- */
+/* 修复 ESLint: 替代内联样式 style.position/top/left/visibility */
 .canvas-measure-wrapper {
     position: absolute;
     visibility: hidden;
@@ -171,6 +179,7 @@
     left: -9999px;
 }
 
+/* 修复 ESLint: 替代内联样式 style.padding/boxSizing/overflowWrap */
 .canvas-measure-content {
     padding: 16px;
     box-sizing: border-box;

@@ -72,7 +72,7 @@ export default class BreadcrumbPlugin extends Plugin {
     settings: BreadcrumbSettings;
 
     async onload() {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as BreadcrumbSettings);
         // 样式注入已移除，改用 styles.css，Obsidian 会自动加载它
         this.addSettingTab(new BreadcrumbSettingTab(this.app, this));
 
@@ -187,8 +187,8 @@ export default class BreadcrumbPlugin extends Plugin {
                 }
             }
             this.canvasIndex.set(file.path, referencedPaths);
-        } catch (e) {
-            console.error(`[BreadcrumbPlugin] Failed to index canvas: ${file.path}`, e);
+        } catch (error) {
+            console.error(`[BreadcrumbPlugin] Failed to index canvas: ${file.path}`, error);
             this.canvasIndex.delete(file.path);
         }
     }
@@ -288,8 +288,8 @@ export default class BreadcrumbPlugin extends Plugin {
                 if (canvasFile && canvasFile instanceof TFile) {
                     await this.syncNodeInCanvas(canvasFile, file);
                 }
-            } catch (e) {
-                console.error(`[BreadcrumbPlugin] Failed to auto-sync to canvas: ${canvasPath}`, e);
+            } catch (error) {
+                console.error(`[BreadcrumbPlugin] Failed to auto-sync to canvas: ${canvasPath}`, error);
             }
         }
     }
@@ -510,7 +510,9 @@ export default class BreadcrumbPlugin extends Plugin {
                 text: this.cleanName(file.basename)
             });
             if (!isLast) {
-                item.onclick = () => this.openFile(file);
+                item.onclick = async () => {
+                    await this.openFile(file);
+                };
                 breadcrumbBox.createSpan({ cls: 'breadcrumb-separator', text: '/' });
             }
         });
@@ -544,12 +546,16 @@ export default class BreadcrumbPlugin extends Plugin {
 
         if (hasFiles) {
             btn.onclick = (e) => {
-                if (targetFiles.length === 1 && firstFile) this.openFile(firstFile);
+                if (targetFiles.length === 1 && firstFile) {
+                    void this.openFile(firstFile);
+                }
                 else {
                     const menu = new Menu();
                     targetFiles.forEach(f => {
                         menu.addItem(item => {
-                            item.setTitle(this.cleanName(f.basename)).setIcon('link').onClick(() => this.openFile(f));
+                            item.setTitle(this.cleanName(f.basename)).setIcon('link').onClick(async () => {
+                                await this.openFile(f);
+                            });
                         });
                     });
                     menu.showAtMouseEvent(e);
@@ -623,9 +629,9 @@ export default class BreadcrumbPlugin extends Plugin {
         return this.app.metadataCache.getFirstLinkpathDest(linkText, '');
     }
 
-    openFile(file: TFile) {
+    async openFile(file: TFile) {
         if (file instanceof TFile) {
-            this.app.workspace.getLeaf(false).openFile(file);
+            await this.app.workspace.getLeaf(false).openFile(file);
         }
     }
 }
@@ -657,11 +663,8 @@ class CanvasReferencesModal extends Modal {
             if (type === 'potential') {
                 setIcon(iconBox, 'circle-dashed'); 
                 iconBox.title = "未引用 (点击添加)";
-                // 使用 CSS 变量或类来设置颜色，避免内联样式报错 (已在 styles.css 中通过类名处理，或此处用 CSS 变量)
-                // 为保险起见，这里设置 style.color 可能仍会被 strict lint 警告，但通常 setCssProps 是推荐做法
-                // 更好的做法是加一个 specific class
-                iconBox.addClass('potential-icon-color'); // 需在 CSS 补充，或直接保留 setAttribute
-                iconBox.setAttribute('style', 'color: var(--text-accent)'); 
+                // 修复：移除 setAttribute，改用 CSS 类 (potential-ref)
+                iconBox.addClass('potential-ref'); 
             } else {
                 setIcon(iconBox, 'box-select'); 
             }
