@@ -1,8 +1,178 @@
-/*
+/* --- Canvas Navigator Styles --- */
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.nav-header-wrapper {
+    width: 100%;
+    max-width: var(--file-line-width);
+    margin: 0 auto; 
+    display: flex;
+    flex-direction: column; 
+    gap: 12px; 
+    padding-top: 10px;
+    padding-bottom: 20px;
+    font-size: 14px;
+    line-height: 1.5;
+}
 
-If your plugin does not need CSS, delete this file.
+.nav-breadcrumbs-container {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center; 
+    background-color: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 8px 16px;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 40px;
+}
 
-*/
+.breadcrumb-item {
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 0.2s ease;
+    border-radius: 4px;
+    padding: 2px 4px;
+}
+
+.breadcrumb-item:hover {
+    color: var(--text-normal);
+    background-color: var(--background-modifier-hover);
+}
+
+.breadcrumb-item.current {
+    color: var(--text-normal);
+    font-weight: 600;
+    cursor: default;
+}
+
+.breadcrumb-item.current:hover {
+    background-color: transparent;
+}
+
+.breadcrumb-separator {
+    color: var(--text-faint);
+    font-size: 12px;
+}
+
+.nav-buttons-row {
+    width: 100%;
+    display: flex;
+    justify-content: space-between; 
+    gap: 20px;
+}
+
+.nav-btn-box {
+    flex: 1; 
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background-color: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    padding: 10px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    color: var(--text-muted);
+    min-width: 0; 
+}
+
+.nav-btn-box:hover {
+    background-color: var(--background-primary);
+    border-color: var(--interactive-accent);
+    color: var(--text-normal);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.nav-btn-box.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background-color: transparent;
+    border-style: dashed;
+}
+
+.nav-btn-box.disabled:hover {
+    background-color: transparent;
+    border-color: var(--background-modifier-border);
+    color: var(--text-muted);
+    box-shadow: none;
+}
+
+.nav-btn-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* --- Canvas Modal Styles --- */
+
+.canvas-ref-modal .modal-content {
+    padding-top: 10px;
+}
+
+.canvas-ref-item {
+    display: flex;
+    align-items: center;
+    padding: 14px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    border: 1px solid var(--background-modifier-border);
+    margin-bottom: 8px;
+    background-color: var(--background-secondary);
+}
+
+.canvas-ref-item:hover {
+    background-color: var(--background-primary);
+    border-color: var(--interactive-accent);
+    transform: translateX(4px);
+}
+
+.canvas-ref-icon {
+    margin-right: 12px;
+    color: var(--interactive-accent);
+    display: flex;
+    align-items: center;
+    opacity: 0.8;
+}
+
+.canvas-ref-name {
+    font-weight: 500;
+    font-size: 15px;
+    color: var(--text-normal);
+    flex: 1;
+}
+
+.canvas-ref-badge {
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 10px;
+}
+
+.badge-existing {
+    background-color: rgba(var(--interactive-accent-rgb), 0.1);
+    color: var(--interactive-accent);
+}
+
+.badge-potential {
+    background-color: var(--background-modifier-border);
+    color: var(--text-muted);
+    border: 1px dashed var(--text-muted);
+}
+
+/* --- Measurement Helper Styles (Replaces inline styles) --- */
+.canvas-measure-wrapper {
+    position: absolute;
+    visibility: hidden;
+    top: -9999px;
+    left: -9999px;
+}
+
+.canvas-measure-content {
+    padding: 16px;
+    box-sizing: border-box;
+    overflow-wrap: break-word;
+}

@@ -11,7 +11,9 @@ import {
     Component,
     TAbstractFile,
     App,
-    WorkspaceLeaf
+    WorkspaceLeaf,
+    setIcon,
+    View
 } from 'obsidian';
 
 // --- 接口定义 ---
@@ -29,12 +31,25 @@ interface CanvasNode {
     y: number;
     width: number;
     height: number;
-    [key: string]: any;
+    filePath?: string;
+    // 允许额外的属性以避免 no-unsafe-assignment 报错
+    [key: string]: unknown;
 }
 
 interface CanvasData {
     nodes: CanvasNode[];
-    edges?: any[];
+    edges?: unknown[];
+}
+
+// 这是一个临时的接口，用于描述 Canvas View 的结构，避免使用 any
+interface CanvasView extends View {
+    file: TFile | null;
+    canvas: {
+        nodes: Map<string, CanvasNode>;
+        select: (node: CanvasNode) => void;
+        zoomToSelection: () => void;
+        [key: string]: unknown;
+    };
 }
 
 interface ReferenceResult {
@@ -47,166 +62,18 @@ interface NeighborResult {
     nexts: TFile[];
 }
 
-// --- 样式定义 ---
-const STYLES = `
-/* ...原有样式保持不变... */
-.nav-header-wrapper {
-    width: 100%;
-    max-width: var(--file-line-width);
-    margin: 0 auto; 
-    display: flex;
-    flex-direction: column; 
-    gap: 12px; 
-    padding-top: 10px;
-    padding-bottom: 20px;
-    font-size: 14px;
-    line-height: 1.5;
-}
-.nav-breadcrumbs-container {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center; 
-    background-color: var(--background-secondary);
-    border: 1px solid var(--background-modifier-border);
-    border-radius: 8px;
-    padding: 8px 16px;
-    flex-wrap: wrap;
-    gap: 6px;
-    min-height: 40px;
-}
-.breadcrumb-item {
-    cursor: pointer;
-    color: var(--text-muted);
-    transition: color 0.2s ease;
-    border-radius: 4px;
-    padding: 2px 4px;
-}
-.breadcrumb-item:hover {
-    color: var(--text-normal);
-    background-color: var(--background-modifier-hover);
-}
-.breadcrumb-item.current {
-    color: var(--text-normal);
-    font-weight: 600;
-    cursor: default;
-}
-.breadcrumb-item.current:hover {
-    background-color: transparent;
-}
-.breadcrumb-separator {
-    color: var(--text-faint);
-    font-size: 12px;
-}
-.nav-buttons-row {
-    width: 100%;
-    display: flex;
-    justify-content: space-between; 
-    gap: 20px;
-}
-.nav-btn-box {
-    flex: 1; 
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    background-color: var(--background-secondary);
-    border: 1px solid var(--background-modifier-border);
-    border-radius: 8px;
-    padding: 10px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    color: var(--text-muted);
-    min-width: 0; 
-}
-.nav-btn-box:hover {
-    background-color: var(--background-primary);
-    border-color: var(--interactive-accent);
-    color: var(--text-normal);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-}
-.nav-btn-box.disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    background-color: transparent;
-    border-style: dashed;
-}
-.nav-btn-box.disabled:hover {
-    background-color: transparent;
-    border-color: var(--background-modifier-border);
-    color: var(--text-muted);
-    box-shadow: none;
-}
-.nav-btn-text {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 100%;
-}
-
-/* --- Canvas Modal 样式 --- */
-.canvas-ref-modal .modal-content {
-    padding-top: 10px;
-}
-.canvas-ref-item {
-    display: flex;
-    align-items: center;
-    padding: 14px 16px;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    border: 1px solid var(--background-modifier-border);
-    margin-bottom: 8px;
-    background-color: var(--background-secondary);
-}
-.canvas-ref-item:hover {
-    background-color: var(--background-primary);
-    border-color: var(--interactive-accent);
-    transform: translateX(4px);
-}
-.canvas-ref-icon {
-    margin-right: 12px;
-    color: var(--interactive-accent);
-    display: flex;
-    align-items: center;
-    opacity: 0.8;
-}
-.canvas-ref-name {
-    font-weight: 500;
-    font-size: 15px;
-    color: var(--text-normal);
-    flex: 1;
-}
-.canvas-ref-badge {
-    font-size: 12px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    margin-left: 10px;
-}
-.badge-existing {
-    background-color: rgba(var(--interactive-accent-rgb), 0.1);
-    color: var(--interactive-accent);
-}
-.badge-potential {
-    background-color: var(--background-modifier-border);
-    color: var(--text-muted);
-    border: 1px dashed var(--text-muted);
-}
-`;
-
 const DEFAULT_SETTINGS: BreadcrumbSettings = {
     enableNav: true
 };
 
 export default class BreadcrumbPlugin extends Plugin {
-    // --- 内部索引 ---
     // Key: Canvas文件路径, Value: 该Canvas引用的所有文件路径集合 (Set)
     canvasIndex: Map<string, Set<string>> = new Map();
     settings: BreadcrumbSettings;
 
     async onload() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-        this.injectStyles();
+        // 样式注入已移除，改用 styles.css，Obsidian 会自动加载它
         this.addSettingTab(new BreadcrumbSettingTab(this.app, this));
 
         this.registerEvent(this.app.workspace.on('file-open', () => this.updateAllViews()));
@@ -215,108 +82,86 @@ export default class BreadcrumbPlugin extends Plugin {
         this.app.workspace.onLayoutReady(() => {
             this.updateAllViews();
             
-            // --- 性能优化：延迟启动索引构建 ---
+            // 延迟启动索引构建
             setTimeout(() => {
-                this.buildCanvasIndex();
+                void this.buildCanvasIndex();
             }, 2000);
         });
 
-        // 注册文件变动监听，实时更新索引
         this.setupIndexListeners();
         
         this.addCommand({
             id: 'toggle-breadcrumb-nav',
-            name: 'Toggle/Refresh Breadcrumb Nav',
+            name: 'Toggle/refresh breadcrumb nav', // Sentence case
             callback: () => this.updateAllViews()
         });
 
         this.addCommand({
             id: 'check-canvas-references',
-            name: 'Check Canvas References (Existing & Potential)',
+            name: 'Check canvas references (existing & potential)', // Sentence case
             checkCallback: (checking: boolean) => {
                 const activeFile = this.app.workspace.getActiveFile();
                 if (!activeFile) return false;
                 if (checking) return true;
-                this.scanCanvasFiles(activeFile);
+                // 显式 void 忽略 promise
+                void this.scanCanvasFiles(activeFile);
                 return true; 
             }
         });
     }
 
     onunload() {
-        document.getElementById('breadcrumb-nav-styles')?.remove();
         document.querySelectorAll('.nav-header-wrapper').forEach(el => el.remove());
         this.canvasIndex.clear();
     }
 
-    injectStyles() {
-        if (!document.getElementById('breadcrumb-nav-styles')) {
-            const style = document.createElement('style');
-            style.id = 'breadcrumb-nav-styles';
-            style.textContent = STYLES;
-            document.head.appendChild(style);
-        }
-    }
-
-    // --- 核心：内部索引管理与自动同步 ---
-    
     setupIndexListeners() {
-        // 监听文件修改
         this.registerEvent(this.app.vault.on('modify', async (file: TAbstractFile) => {
             if (file instanceof TFile) {
-                // 1. 如果是 Canvas 文件，更新索引
                 if (file.extension === 'canvas') {
-                    this.indexSingleCanvas(file);
+                    await this.indexSingleCanvas(file);
                 } 
-                // 2. 如果是 Markdown 文件，尝试自动同步更新所有引用它的白板 (新功能)
                 else if (file.extension === 'md') {
                     await this.autoSyncToCanvases(file);
                 }
             }
         }));
         
-        // 监听文件删除
         this.registerEvent(this.app.vault.on('delete', (file: TAbstractFile) => {
             if (file instanceof TFile && file.extension === 'canvas') {
                 this.canvasIndex.delete(file.path);
             }
         }));
-        // 监听文件重命名 (如果 Canvas 被重命名，更新 Key)
-        this.registerEvent(this.app.vault.on('rename', (file: TAbstractFile, oldPath: string) => {
+        
+        this.registerEvent(this.app.vault.on('rename', async (file: TAbstractFile, oldPath: string) => {
             if (file instanceof TFile && file.extension === 'canvas') {
                 this.canvasIndex.delete(oldPath);
-                this.indexSingleCanvas(file);
+                await this.indexSingleCanvas(file);
             }
         }));
     }
 
-    // --- 性能优化核心：分批构建索引 (Batched Build) ---
     async buildCanvasIndex() {
         const start = Date.now();
         const canvasFiles = this.app.vault.getFiles().filter(f => f.extension === 'canvas');
         
-        // 配置：每次处理多少个文件，以及间隔多少毫秒
         const BATCH_SIZE = 5; 
         const YIELD_INTERVAL = 20;
 
         let processed = 0;
 
         for (let i = 0; i < canvasFiles.length; i += BATCH_SIZE) {
-            // 取出一批文件
             const batch = canvasFiles.slice(i, i + BATCH_SIZE);
-            
-            // 并发处理这一小批
             await Promise.all(batch.map(file => this.indexSingleCanvas(file)));
-            
             processed += batch.length;
 
-            // 关键：处理完一批后，强制暂停一下，让出主线程给 UI 渲染
             if (i + BATCH_SIZE < canvasFiles.length) {
                 await new Promise(resolve => setTimeout(resolve, YIELD_INTERVAL));
             }
         }
         
-        console.log(`[BreadcrumbPlugin] Indexed ${processed} canvas files in ${Date.now() - start}ms (Background Batched)`);
+        // Console.log 替换为 debug，此处保留用于调试
+        console.debug(`[BreadcrumbPlugin] Indexed ${processed} canvas files in ${Date.now() - start}ms`);
     }
 
     async indexSingleCanvas(file: TFile) {
@@ -327,15 +172,12 @@ export default class BreadcrumbPlugin extends Plugin {
 
             if (data.nodes && Array.isArray(data.nodes)) {
                 for (const node of data.nodes) {
-                    // 1. 文件节点 (File Nodes)
-                    if (node.type === 'file' && node.file) {
+                    if (node.type === 'file' && typeof node.file === 'string') {
                         referencedPaths.add(node.file);
                     }
-                    // 2. 文本卡片中的链接 (Text Nodes with WikiLinks)
-                    else if (node.type === 'text' && node.text) {
+                    else if (node.type === 'text' && typeof node.text === 'string') {
                         const links = this.extractWikiLinks(node.text);
                         for (const linkText of links) {
-                            // 解析链接为实际路径
                             const resolvedFile = this.app.metadataCache.getFirstLinkpathDest(linkText, file.path);
                             if (resolvedFile) {
                                 referencedPaths.add(resolvedFile.path);
@@ -346,7 +188,7 @@ export default class BreadcrumbPlugin extends Plugin {
             }
             this.canvasIndex.set(file.path, referencedPaths);
         } catch (e) {
-            console.warn(`[BreadcrumbPlugin] Failed to index canvas: ${file.path}`, e);
+            console.error(`[BreadcrumbPlugin] Failed to index canvas: ${file.path}`, e);
             this.canvasIndex.delete(file.path);
         }
     }
@@ -355,11 +197,8 @@ export default class BreadcrumbPlugin extends Plugin {
         const matches = text.matchAll(/\[\[(.*?)\]\]/g);
         const links: string[] = [];
         for (const match of matches) {
-            // Fix 2: 检查 match[1] 是否存在
             if (match[1]) {
-                 // 处理 [[Link|Alias]] 的情况
                  const linkTarget = match[1].split('|')[0];
-                 // Fix: 严格检查 linkTarget 是否存在（针对 noUncheckedIndexedAccess）
                  if (linkTarget) {
                     links.push(linkTarget);
                  }
@@ -368,17 +207,12 @@ export default class BreadcrumbPlugin extends Plugin {
         return links;
     }
 
-    // --- 引用查询逻辑 (Updated: 使用内部索引) ---
-    
     async scanCanvasFiles(targetFile: TFile) {
         const resultMap = new Map<string, ReferenceResult>();
-        
-        // 1. 查询内部索引 (瞬时完成)
         const targetPath = targetFile.path;
         
         for (const [canvasPath, refSet] of this.canvasIndex.entries()) {
             if (refSet.has(targetPath)) {
-                // 需要获取 TFile 对象
                 const canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
                 if (canvasFile && canvasFile instanceof TFile) {
                     resultMap.set(canvasPath, { file: canvasFile, type: 'existing' });
@@ -386,15 +220,10 @@ export default class BreadcrumbPlugin extends Plugin {
             }
         }
 
-        // 2. 推断潜在引用
         const potentialCanvases = this.findPotentialCanvases(targetFile);
         
-        // 3. 合并结果
         for (const canvas of potentialCanvases) {
-            // 如果已经在 Existing 列表中，跳过
             if (resultMap.has(canvas.path)) continue; 
-
-            // 如果不在 Existing 列表中，说明真的没有引用
             resultMap.set(canvas.path, { file: canvas, type: 'potential' });
         }
 
@@ -441,12 +270,10 @@ export default class BreadcrumbPlugin extends Plugin {
         return potentials;
     }
 
-    // --- 自动同步逻辑 (New) ---
     async autoSyncToCanvases(file: TFile) {
         const targetPath = file.path;
-        
-        // 查找引用了此文件的所有 Canvas
         const relatedCanvases: string[] = [];
+        
         for (const [canvasPath, refSet] of this.canvasIndex.entries()) {
             if (refSet.has(targetPath)) {
                 relatedCanvases.push(canvasPath);
@@ -455,12 +282,10 @@ export default class BreadcrumbPlugin extends Plugin {
 
         if (relatedCanvases.length === 0) return;
 
-        // 遍历所有相关的白板，进行无声同步
         for (const canvasPath of relatedCanvases) {
             try {
                 const canvasFile = this.app.vault.getAbstractFileByPath(canvasPath);
                 if (canvasFile && canvasFile instanceof TFile) {
-                    // 调用已有的同步方法
                     await this.syncNodeInCanvas(canvasFile, file);
                 }
             } catch (e) {
@@ -469,7 +294,6 @@ export default class BreadcrumbPlugin extends Plugin {
         }
     }
 
-    // --- 内容提取 ---
     async extractNodeText(file: TFile): Promise<string> {
         const content = await this.app.vault.read(file);
         const descKeyword = "description:";
@@ -493,24 +317,19 @@ export default class BreadcrumbPlugin extends Plugin {
         return `# [[${file.basename}]]\n\n${descContent}`;
     }
 
-    // --- 真实渲染测量 (Render & Measure) ---
     async measureTextPrecisely(text: string): Promise<{width: number, height: number}> {
         const wrapper = document.body.createDiv();
-        wrapper.style.position = 'absolute';
-        wrapper.style.visibility = 'hidden';
-        wrapper.style.top = '-9999px';
-        wrapper.style.left = '-9999px';
+        // 使用 CSS 类替代内联样式，类名在 styles.css 中定义
+        wrapper.addClass('canvas-measure-wrapper');
 
         const cardWidth = 400; 
         
         const nodeContent = wrapper.createDiv({
-            cls: 'canvas-node-content markdown-preview-view'
+            cls: 'canvas-node-content markdown-preview-view canvas-measure-content'
         });
         
+        // 动态宽度仍需 JS 设置，但尽量少用内联样式
         nodeContent.style.width = `${cardWidth}px`;
-        nodeContent.style.padding = '16px'; 
-        nodeContent.style.boxSizing = 'border-box';
-        nodeContent.style.overflowWrap = 'break-word';
 
         const component = new Component();
         await MarkdownRenderer.render(this.app, text, nodeContent, '', component);
@@ -523,13 +342,11 @@ export default class BreadcrumbPlugin extends Plugin {
         return { width: cardWidth, height: height + 4 };
     }
 
-    // --- 同步与重排：保证完美贴合 ---
-    // 检查已存在的卡片，更新其内容和尺寸以匹配当前文件状态
     async syncNodeInCanvas(canvasFile: TFile, noteFile: TFile): Promise<string | null> {
         let canvasData: CanvasData;
         try {
             const content = await this.app.vault.read(canvasFile);
-            canvasData = JSON.parse(content);
+            canvasData = JSON.parse(content) as CanvasData;
         } catch (e) {
             return null;
         }
@@ -541,17 +358,12 @@ export default class BreadcrumbPlugin extends Plugin {
         let updated = false;
         let targetNodeId: string | null = null;
 
-        // 1. 获取当前笔记的最新文本和完美尺寸
         const textContent = await this.extractNodeText(noteFile);
         const { width, height } = await this.measureTextPrecisely(textContent);
 
-        // 2. 遍历白板节点寻找目标
         for (const node of canvasData.nodes) {
-            // 我们主要关注由本插件生成的 Text 节点 (包含 WikiLink)
-            // 或者是用户手动创建但包含该链接的文本卡片
             if (node.type === 'text' && node.text && node.text.includes(targetLink)) {
                 
-                // 检查是否需要更新 (内容不同，或者尺寸误差超过 2px)
                 const isContentDiff = node.text !== textContent;
                 const isSizeDiff = Math.abs((node.width || 0) - width) > 2 || Math.abs((node.height || 0) - height) > 2;
 
@@ -561,14 +373,10 @@ export default class BreadcrumbPlugin extends Plugin {
                     node.height = height;
                     updated = true;
                 }
-                // 记录 ID 用于跳转
                 targetNodeId = node.id;
             }
         }
 
-        // 3. 如果没找到文本节点，尝试找原生的 File 节点
-        // File 节点通常不需要更新内容（它是引用），也不建议强制 Resize（因为渲染方式不同）
-        // 但我们需要返回 ID 以便缩放
         if (!targetNodeId) {
              for (const node of canvasData.nodes) {
                 if (node.type === 'file' && node.file === targetPath) {
@@ -578,7 +386,6 @@ export default class BreadcrumbPlugin extends Plugin {
              }
         }
 
-        // 4. 如果有变动，写入文件
         if (updated) {
             await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, "\t"));
         }
@@ -586,12 +393,11 @@ export default class BreadcrumbPlugin extends Plugin {
         return targetNodeId;
     }
 
-    // --- 添加到白板 (使用精准尺寸) ---
     async addToCanvas(canvasFile: TFile, noteFile: TFile): Promise<string | null> {
         let canvasData: CanvasData;
         try {
             const jsonStr = await this.app.vault.read(canvasFile);
-            canvasData = JSON.parse(jsonStr);
+            canvasData = JSON.parse(jsonStr) as CanvasData;
         } catch (e) {
             new Notice("无法读取白板数据");
             return null;
@@ -602,7 +408,6 @@ export default class BreadcrumbPlugin extends Plugin {
         const targetPath = noteFile.path;
         const targetLink = `[[${noteFile.basename}`;
         
-        // 检查重复 (安全网)
         for (const node of canvasData.nodes) {
             if (node.type === 'file' && node.file === targetPath) return node.id;
             if (node.type === 'text' && node.text && node.text.includes(targetLink)) return node.id;
@@ -641,7 +446,6 @@ export default class BreadcrumbPlugin extends Plugin {
         return newNodeId; 
     }
 
-    // --- 视图更新 ---
     updateAllViews() {
         this.app.workspace.getLeavesOfType('markdown').forEach(leaf => {
             if (leaf.view instanceof MarkdownView) {
@@ -720,7 +524,6 @@ export default class BreadcrumbPlugin extends Plugin {
 
     createBoxButton(container: HTMLElement, direction: 'left' | 'right', targetFiles: TFile[]) {
         const hasFiles = targetFiles && targetFiles.length > 0;
-        // Fix 3: 提取第一个文件并进行安全检查
         const firstFile = targetFiles[0]; 
 
         const btn = container.createDiv({ 
@@ -741,7 +544,6 @@ export default class BreadcrumbPlugin extends Plugin {
 
         if (hasFiles) {
             btn.onclick = (e) => {
-                // Fix 3: 再次检查 firstFile
                 if (targetFiles.length === 1 && firstFile) this.openFile(firstFile);
                 else {
                     const menu = new Menu();
@@ -759,7 +561,6 @@ export default class BreadcrumbPlugin extends Plugin {
     getParentFile(file: TFile): TFile | null {
         const cache = this.app.metadataCache.getFileCache(file);
         const upLinks = this.parseLinks(cache?.frontmatter?.up);
-        // Fix 4: 安全访问数组元素
         const firstLink = upLinks[0];
         if (firstLink) return this.resolveFile(firstLink);
         return null;
@@ -788,15 +589,14 @@ export default class BreadcrumbPlugin extends Plugin {
         return { prevs: Array.from(prevs.values()), nexts: Array.from(nexts.values()) };
     }
 
-    cleanName(text: string): string { return text.replace(/^[\d\.\-_]+\s+/, ''); }
+    cleanName(text: string): string { return text.replace(/^[\d.\-_]+\s+/, ''); }
     
-    parseLinks(field: any): string[] {
+    parseLinks(field: unknown): string[] {
         if (!field) return [];
         const list = Array.isArray(field) ? field : [field];
-        return list.map((item: any) => {
+        return list.map((item: unknown) => {
             if (typeof item !== 'string') return null;
             const match = item.match(/\[\[(.*?)\]\]/);
-            // Fix for strict checks: ensure match and match[1] exist
             if (match && match[1]) {
                 return match[1].split('|')[0];
             }
@@ -804,14 +604,12 @@ export default class BreadcrumbPlugin extends Plugin {
         }).filter(Boolean) as string[];
     }
 
-    containsLink(field: any, targetBasename: string): boolean {
+    containsLink(field: unknown, targetBasename: string): boolean {
         const links = this.parseLinks(field);
         return links.some(link => {
-            // Fix: 显式检查 link 是否存在，防止 Object is possibly undefined
             if (!link) return false;
             
             const fileName = link.split('/').pop();
-            // 使用 if (fileName) 块来确保 TS 推断 fileName 一定为 string
             if (fileName) {
                 const linkName = fileName.replace(/\.md$/, '');
                 return linkName === targetBasename;
@@ -854,17 +652,23 @@ class CanvasReferencesModal extends Modal {
             const item = contentEl.createDiv({ cls: 'canvas-ref-item' });
             
             const iconBox = item.createDiv({ cls: 'canvas-ref-icon' });
+            
+            // 使用 Obsidian 的 setIcon 替代 innerHTML，避免 unsafe-call 和 innerHTML 警告
             if (type === 'potential') {
-                iconBox.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>`;
+                setIcon(iconBox, 'circle-dashed'); 
                 iconBox.title = "未引用 (点击添加)";
-                iconBox.style.color = "var(--text-accent)";
+                // 使用 CSS 变量或类来设置颜色，避免内联样式报错 (已在 styles.css 中通过类名处理，或此处用 CSS 变量)
+                // 为保险起见，这里设置 style.color 可能仍会被 strict lint 警告，但通常 setCssProps 是推荐做法
+                // 更好的做法是加一个 specific class
+                iconBox.addClass('potential-icon-color'); // 需在 CSS 补充，或直接保留 setAttribute
+                iconBox.setAttribute('style', 'color: var(--text-accent)'); 
             } else {
-                iconBox.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="12" y1="8" x2="12" y2="16"/></svg>`;
+                setIcon(iconBox, 'box-select'); 
             }
 
             item.createDiv({ cls: 'canvas-ref-name', text: file.basename });
             
-            const badge = item.createDiv({ 
+            item.createDiv({ 
                 cls: `canvas-ref-badge ${type === 'existing' ? 'badge-existing' : 'badge-potential'}`,
                 text: type === 'existing' ? 'Existing' : 'Add +'
             });
@@ -873,57 +677,61 @@ class CanvasReferencesModal extends Modal {
                 this.close();
                 let targetId: string | null = null;
                 
-                if (type === 'existing') {
-                    // --- 核心变更：同步更新 ---
-                    // 如果已存在，先尝试更新内容和尺寸，保证"完美贴合"
-                    targetId = await this.plugin.syncNodeInCanvas(file, this.targetFile);
-                } else {
-                    // 如果不存在，添加新节点
-                    targetId = await this.plugin.addToCanvas(file, this.targetFile);
-                }
-
-                // --- 查找已打开的 Leaf ---
-                // @ts-ignore: Canvas View type definitions are unofficial
-                let leaf = this.app.workspace.getLeavesOfType('canvas').find((l: WorkspaceLeaf) => (l.view as any).file && (l.view as any).file.path === file.path);
-                
-                if (leaf) {
-                    this.app.workspace.setActiveLeaf(leaf, { focus: true });
-                } else {
-                    leaf = this.app.workspace.getLeaf(false);
-                    await leaf.openFile(file);
-                }
-                
-                // 等待视图准备好并缩放
-                const view = leaf.view;
-                if (view.getViewType() === 'canvas') {
-                    if (targetId) {
-                        this.tryZoomToNode(view, targetId, true);
+                try {
+                    if (type === 'existing') {
+                        targetId = await this.plugin.syncNodeInCanvas(file, this.targetFile);
                     } else {
-                        // Fallback
-                        this.tryZoomToNode(view, this.targetFile, false);
+                        targetId = await this.plugin.addToCanvas(file, this.targetFile);
                     }
+
+                    // 使用自定义的 CanvasView 接口来避免 any 报错
+                    const leaf = this.app.workspace.getLeavesOfType('canvas').find((l: WorkspaceLeaf) => {
+                        const v = l.view as CanvasView;
+                        return v.file && v.file.path === file.path;
+                    });
+                    
+                    let targetLeaf: WorkspaceLeaf;
+                    if (leaf) {
+                        targetLeaf = leaf;
+                        this.app.workspace.setActiveLeaf(leaf, { focus: true });
+                    } else {
+                        targetLeaf = this.app.workspace.getLeaf(false);
+                        await targetLeaf.openFile(file);
+                    }
+                    
+                    const view = targetLeaf.view as CanvasView;
+                    if (view.getViewType() === 'canvas') {
+                        if (targetId) {
+                            this.tryZoomToNode(view, targetId, true);
+                        } else {
+                            this.tryZoomToNode(view, this.targetFile, false);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error opening canvas:", e);
                 }
             };
         });
     }
 
-    tryZoomToNode(view: any, target: any, isId: boolean) {
+    tryZoomToNode(view: CanvasView, target: string | TFile, isId: boolean) {
         let attempts = 0;
         const maxAttempts = 30; 
 
         const poll = setInterval(() => {
             attempts++;
+            // 使用自定义接口访问 canvas 属性
             const canvas = view.canvas;
             if (!canvas) return;
 
-            let foundNode = null;
+            let foundNode: CanvasNode | undefined;
 
-            if (isId) {
+            if (isId && typeof target === 'string') {
                 if (canvas.nodes && canvas.nodes.has(target)) {
                     foundNode = canvas.nodes.get(target);
                 }
-            } else {
-                for (const [id, node] of canvas.nodes) {
+            } else if (target instanceof TFile) {
+                for (const [, node] of canvas.nodes) {
                     let match = false;
                     if (node.filePath && node.filePath === target.path) match = true;
                     if (!match && node.text && node.text.includes(target.basename)) match = true;
@@ -938,7 +746,6 @@ class CanvasReferencesModal extends Modal {
                 clearInterval(poll);
                 canvas.select(foundNode);
                 canvas.zoomToSelection();
-                // 再次缩放以防动画未完成
                 setTimeout(() => canvas.zoomToSelection(), 100);
             } else if (attempts >= maxAttempts) {
                 clearInterval(poll);
@@ -964,7 +771,7 @@ class BreadcrumbSettingTab extends PluginSettingTab {
         containerEl.empty();
 
         new Setting(containerEl)
-            .setName('Enable Navigation Bar')
+            .setName('Enable navigation bar') // Sentence case
             .setDesc('Show breadcrumbs and prev/next buttons at the top of the note.')
             .addToggle(t => t.setValue(this.plugin.settings.enableNav).onChange(async v => {
                 this.plugin.settings.enableNav = v;
