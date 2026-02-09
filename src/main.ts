@@ -1,5 +1,51 @@
-// @ts-nocheck
-import { Plugin, PluginSettingTab, Setting, TFile, MarkdownView, Menu, Modal, Notice, MarkdownRenderer, Component, TAbstractFile } from 'obsidian';
+import {
+    Plugin,
+    PluginSettingTab,
+    Setting,
+    TFile,
+    MarkdownView,
+    Menu,
+    Modal,
+    Notice,
+    MarkdownRenderer,
+    Component,
+    TAbstractFile,
+    App,
+    WorkspaceLeaf
+} from 'obsidian';
+
+// --- 接口定义 ---
+
+interface BreadcrumbSettings {
+    enableNav: boolean;
+}
+
+interface CanvasNode {
+    id: string;
+    type: string;
+    text?: string;
+    file?: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    [key: string]: any;
+}
+
+interface CanvasData {
+    nodes: CanvasNode[];
+    edges?: any[];
+}
+
+interface ReferenceResult {
+    file: TFile;
+    type: 'existing' | 'potential';
+}
+
+interface NeighborResult {
+    prevs: TFile[];
+    nexts: TFile[];
+}
 
 // --- 样式定义 ---
 const STYLES = `
@@ -148,14 +194,15 @@ const STYLES = `
 }
 `;
 
-const DEFAULT_SETTINGS = {
+const DEFAULT_SETTINGS: BreadcrumbSettings = {
     enableNav: true
 };
 
 export default class BreadcrumbPlugin extends Plugin {
     // --- 内部索引 ---
     // Key: Canvas文件路径, Value: 该Canvas引用的所有文件路径集合 (Set)
-    canvasIndex = new Map();
+    canvasIndex: Map<string, Set<string>> = new Map();
+    settings: BreadcrumbSettings;
 
     async onload() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -186,11 +233,12 @@ export default class BreadcrumbPlugin extends Plugin {
         this.addCommand({
             id: 'check-canvas-references',
             name: 'Check Canvas References (Existing & Potential)',
-            checkCallback: (checking) => {
+            checkCallback: (checking: boolean) => {
                 const activeFile = this.app.workspace.getActiveFile();
                 if (!activeFile) return false;
                 if (checking) return true;
                 this.scanCanvasFiles(activeFile);
+                return true; 
             }
         });
     }
@@ -214,7 +262,7 @@ export default class BreadcrumbPlugin extends Plugin {
     
     setupIndexListeners() {
         // 监听文件修改
-        this.registerEvent(this.app.vault.on('modify', async (file) => {
+        this.registerEvent(this.app.vault.on('modify', async (file: TAbstractFile) => {
             if (file instanceof TFile) {
                 // 1. 如果是 Canvas 文件，更新索引
                 if (file.extension === 'canvas') {
@@ -228,13 +276,13 @@ export default class BreadcrumbPlugin extends Plugin {
         }));
         
         // 监听文件删除
-        this.registerEvent(this.app.vault.on('delete', (file) => {
+        this.registerEvent(this.app.vault.on('delete', (file: TAbstractFile) => {
             if (file instanceof TFile && file.extension === 'canvas') {
                 this.canvasIndex.delete(file.path);
             }
         }));
         // 监听文件重命名 (如果 Canvas 被重命名，更新 Key)
-        this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+        this.registerEvent(this.app.vault.on('rename', (file: TAbstractFile, oldPath: string) => {
             if (file instanceof TFile && file.extension === 'canvas') {
                 this.canvasIndex.delete(oldPath);
                 this.indexSingleCanvas(file);
@@ -271,11 +319,11 @@ export default class BreadcrumbPlugin extends Plugin {
         console.log(`[BreadcrumbPlugin] Indexed ${processed} canvas files in ${Date.now() - start}ms (Background Batched)`);
     }
 
-    async indexSingleCanvas(file) {
+    async indexSingleCanvas(file: TFile) {
         try {
             const content = await this.app.vault.read(file);
-            const data = JSON.parse(content);
-            const referencedPaths = new Set();
+            const data = JSON.parse(content) as CanvasData;
+            const referencedPaths = new Set<string>();
 
             if (data.nodes && Array.isArray(data.nodes)) {
                 for (const node of data.nodes) {
@@ -303,20 +351,27 @@ export default class BreadcrumbPlugin extends Plugin {
         }
     }
 
-    extractWikiLinks(text) {
+    extractWikiLinks(text: string): string[] {
         const matches = text.matchAll(/\[\[(.*?)\]\]/g);
-        const links = [];
+        const links: string[] = [];
         for (const match of matches) {
-            // 处理 [[Link|Alias]] 的情况
-            links.push(match[1].split('|')[0]);
+            // Fix 2: 检查 match[1] 是否存在
+            if (match[1]) {
+                 // 处理 [[Link|Alias]] 的情况
+                 const linkTarget = match[1].split('|')[0];
+                 // Fix: 严格检查 linkTarget 是否存在（针对 noUncheckedIndexedAccess）
+                 if (linkTarget) {
+                    links.push(linkTarget);
+                 }
+            }
         }
         return links;
     }
 
     // --- 引用查询逻辑 (Updated: 使用内部索引) ---
     
-    async scanCanvasFiles(targetFile) {
-        const resultMap = new Map();
+    async scanCanvasFiles(targetFile: TFile) {
+        const resultMap = new Map<string, ReferenceResult>();
         
         // 1. 查询内部索引 (瞬时完成)
         const targetPath = targetFile.path;
@@ -352,13 +407,15 @@ export default class BreadcrumbPlugin extends Plugin {
         }
     }
 
-    findPotentialCanvases(startFile) {
-        const potentials = [];
-        let queue = [startFile];
-        const visited = new Set([startFile.path]);
+    findPotentialCanvases(startFile: TFile): TFile[] {
+        const potentials: TFile[] = [];
+        let queue: TFile[] = [startFile];
+        const visited = new Set<string>([startFile.path]);
 
         while(queue.length > 0) {
             const curr = queue.shift();
+            if (!curr) continue;
+            
             const cache = this.app.metadataCache.getFileCache(curr);
             if(!cache) continue;
 
@@ -385,11 +442,11 @@ export default class BreadcrumbPlugin extends Plugin {
     }
 
     // --- 自动同步逻辑 (New) ---
-    async autoSyncToCanvases(file) {
+    async autoSyncToCanvases(file: TFile) {
         const targetPath = file.path;
         
         // 查找引用了此文件的所有 Canvas
-        const relatedCanvases = [];
+        const relatedCanvases: string[] = [];
         for (const [canvasPath, refSet] of this.canvasIndex.entries()) {
             if (refSet.has(targetPath)) {
                 relatedCanvases.push(canvasPath);
@@ -413,7 +470,7 @@ export default class BreadcrumbPlugin extends Plugin {
     }
 
     // --- 内容提取 ---
-    async extractNodeText(file) {
+    async extractNodeText(file: TFile): Promise<string> {
         const content = await this.app.vault.read(file);
         const descKeyword = "description:";
         const descIndex = content.indexOf(descKeyword);
@@ -437,7 +494,7 @@ export default class BreadcrumbPlugin extends Plugin {
     }
 
     // --- 真实渲染测量 (Render & Measure) ---
-    async measureTextPrecisely(text) {
+    async measureTextPrecisely(text: string): Promise<{width: number, height: number}> {
         const wrapper = document.body.createDiv();
         wrapper.style.position = 'absolute';
         wrapper.style.visibility = 'hidden';
@@ -468,8 +525,8 @@ export default class BreadcrumbPlugin extends Plugin {
 
     // --- 同步与重排：保证完美贴合 ---
     // 检查已存在的卡片，更新其内容和尺寸以匹配当前文件状态
-    async syncNodeInCanvas(canvasFile, noteFile) {
-        let canvasData;
+    async syncNodeInCanvas(canvasFile: TFile, noteFile: TFile): Promise<string | null> {
+        let canvasData: CanvasData;
         try {
             const content = await this.app.vault.read(canvasFile);
             canvasData = JSON.parse(content);
@@ -482,7 +539,7 @@ export default class BreadcrumbPlugin extends Plugin {
         const targetPath = noteFile.path;
         const targetLink = `[[${noteFile.basename}`;
         let updated = false;
-        let targetNodeId = null;
+        let targetNodeId: string | null = null;
 
         // 1. 获取当前笔记的最新文本和完美尺寸
         const textContent = await this.extractNodeText(noteFile);
@@ -530,8 +587,8 @@ export default class BreadcrumbPlugin extends Plugin {
     }
 
     // --- 添加到白板 (使用精准尺寸) ---
-    async addToCanvas(canvasFile, noteFile) {
-        let canvasData;
+    async addToCanvas(canvasFile: TFile, noteFile: TFile): Promise<string | null> {
+        let canvasData: CanvasData;
         try {
             const jsonStr = await this.app.vault.read(canvasFile);
             canvasData = JSON.parse(jsonStr);
@@ -568,7 +625,7 @@ export default class BreadcrumbPlugin extends Plugin {
         }
 
         const newNodeId = Math.random().toString(36).substring(2, 15);
-        const newNode = {
+        const newNode: CanvasNode = {
             id: newNodeId,
             type: "text",
             text: textContent,
@@ -593,7 +650,7 @@ export default class BreadcrumbPlugin extends Plugin {
         });
     }
 
-    renderView(view) {
+    renderView(view: MarkdownView) {
         const file = view.file;
         if (!file) return;
         const container = view.contentEl;
@@ -623,13 +680,13 @@ export default class BreadcrumbPlugin extends Plugin {
         wrapper.empty();
 
         if (showBreadcrumbs) this.renderBreadcrumbsRow(wrapper, breadcrumbPath);
-        if (showButtons) this.renderButtonsRow(wrapper, prevs, nexts);
+        if (showButtons) this.renderButtonsRow(wrapper as HTMLElement, prevs, nexts);
     }
 
-    getBreadcrumbPath(currentFile) {
-        const path = [];
-        let curr = currentFile;
-        const seen = new Set(); 
+    getBreadcrumbPath(currentFile: TFile): TFile[] {
+        const path: TFile[] = [];
+        let curr: TFile | null = currentFile;
+        const seen = new Set<string>(); 
         while (curr) {
             if (seen.has(curr.path)) break;
             seen.add(curr.path);
@@ -639,7 +696,7 @@ export default class BreadcrumbPlugin extends Plugin {
         return path;
     }
 
-    renderBreadcrumbsRow(container, path) {
+    renderBreadcrumbsRow(container: Element, path: TFile[]) {
         const displayPath = path.length > 3 ? path.slice(-3) : path;
         const breadcrumbBox = container.createDiv({ cls: 'nav-breadcrumbs-container' });
         displayPath.forEach((file, index) => {
@@ -655,20 +712,23 @@ export default class BreadcrumbPlugin extends Plugin {
         });
     }
 
-    renderButtonsRow(container, prevs, nexts) {
+    renderButtonsRow(container: HTMLElement, prevs: TFile[], nexts: TFile[]) {
         const row = container.createDiv({ cls: 'nav-buttons-row' });
         this.createBoxButton(row, 'left', prevs);
         this.createBoxButton(row, 'right', nexts);
     }
 
-    createBoxButton(container, direction, targetFiles) {
+    createBoxButton(container: HTMLElement, direction: 'left' | 'right', targetFiles: TFile[]) {
         const hasFiles = targetFiles && targetFiles.length > 0;
+        // Fix 3: 提取第一个文件并进行安全检查
+        const firstFile = targetFiles[0]; 
+
         const btn = container.createDiv({ 
             cls: `nav-btn-box ${!hasFiles ? 'disabled' : ''}` 
         });
         let labelText = '';
         if (!hasFiles) labelText = direction === 'left' ? '无上一篇' : '无下一篇';
-        else if (targetFiles.length === 1) labelText = this.cleanName(targetFiles[0].basename);
+        else if (targetFiles.length === 1 && firstFile) labelText = this.cleanName(firstFile.basename);
         else labelText = `多条路径 (${targetFiles.length})`; 
 
         if (direction === 'left') {
@@ -681,7 +741,8 @@ export default class BreadcrumbPlugin extends Plugin {
 
         if (hasFiles) {
             btn.onclick = (e) => {
-                if (targetFiles.length === 1) this.openFile(targetFiles[0]);
+                // Fix 3: 再次检查 firstFile
+                if (targetFiles.length === 1 && firstFile) this.openFile(firstFile);
                 else {
                     const menu = new Menu();
                     targetFiles.forEach(f => {
@@ -695,16 +756,18 @@ export default class BreadcrumbPlugin extends Plugin {
         }
     }
 
-    getParentFile(file) {
+    getParentFile(file: TFile): TFile | null {
         const cache = this.app.metadataCache.getFileCache(file);
         const upLinks = this.parseLinks(cache?.frontmatter?.up);
-        if (upLinks.length > 0) return this.resolveFile(upLinks[0]);
+        // Fix 4: 安全访问数组元素
+        const firstLink = upLinks[0];
+        if (firstLink) return this.resolveFile(firstLink);
         return null;
     }
 
-    getNeighbors(file) {
-        const prevs = new Map();
-        const nexts = new Map();
+    getNeighbors(file: TFile): NeighborResult {
+        const prevs = new Map<string, TFile>();
+        const nexts = new Map<string, TFile>();
         const myName = file.basename;
         const cache = this.app.metadataCache.getFileCache(file);
         const fm = cache?.frontmatter;
@@ -725,32 +788,44 @@ export default class BreadcrumbPlugin extends Plugin {
         return { prevs: Array.from(prevs.values()), nexts: Array.from(nexts.values()) };
     }
 
-    cleanName(text) { return text.replace(/^[\d\.\-_]+\s+/, ''); }
+    cleanName(text: string): string { return text.replace(/^[\d\.\-_]+\s+/, ''); }
     
-    parseLinks(field) {
+    parseLinks(field: any): string[] {
         if (!field) return [];
         const list = Array.isArray(field) ? field : [field];
-        return list.map(item => {
+        return list.map((item: any) => {
             if (typeof item !== 'string') return null;
             const match = item.match(/\[\[(.*?)\]\]/);
-            return match ? match[1].split('|')[0] : item;
-        }).filter(Boolean);
+            // Fix for strict checks: ensure match and match[1] exist
+            if (match && match[1]) {
+                return match[1].split('|')[0];
+            }
+            return item;
+        }).filter(Boolean) as string[];
     }
 
-    containsLink(field, targetBasename) {
+    containsLink(field: any, targetBasename: string): boolean {
         const links = this.parseLinks(field);
         return links.some(link => {
-            const linkName = link.split('/').pop().replace(/\.md$/, '');
-            return linkName === targetBasename;
+            // Fix: 显式检查 link 是否存在，防止 Object is possibly undefined
+            if (!link) return false;
+            
+            const fileName = link.split('/').pop();
+            // 使用 if (fileName) 块来确保 TS 推断 fileName 一定为 string
+            if (fileName) {
+                const linkName = fileName.replace(/\.md$/, '');
+                return linkName === targetBasename;
+            }
+            return false;
         });
     }
 
-    resolveFile(linkText) {
+    resolveFile(linkText: string): TFile | null {
         if (!linkText) return null;
         return this.app.metadataCache.getFirstLinkpathDest(linkText, '');
     }
 
-    openFile(file) {
+    openFile(file: TFile) {
         if (file instanceof TFile) {
             this.app.workspace.getLeaf(false).openFile(file);
         }
@@ -758,7 +833,11 @@ export default class BreadcrumbPlugin extends Plugin {
 }
 
 class CanvasReferencesModal extends Modal {
-    constructor(app, results, targetFile, plugin) {
+    results: ReferenceResult[];
+    targetFile: TFile;
+    plugin: BreadcrumbPlugin;
+
+    constructor(app: App, results: ReferenceResult[], targetFile: TFile, plugin: BreadcrumbPlugin) {
         super(app);
         this.results = results; 
         this.targetFile = targetFile;
@@ -792,7 +871,7 @@ class CanvasReferencesModal extends Modal {
 
             item.onclick = async () => {
                 this.close();
-                let targetId = null;
+                let targetId: string | null = null;
                 
                 if (type === 'existing') {
                     // --- 核心变更：同步更新 ---
@@ -804,7 +883,8 @@ class CanvasReferencesModal extends Modal {
                 }
 
                 // --- 查找已打开的 Leaf ---
-                let leaf = this.app.workspace.getLeavesOfType('canvas').find(l => l.view.file && l.view.file.path === file.path);
+                // @ts-ignore: Canvas View type definitions are unofficial
+                let leaf = this.app.workspace.getLeavesOfType('canvas').find((l: WorkspaceLeaf) => (l.view as any).file && (l.view as any).file.path === file.path);
                 
                 if (leaf) {
                     this.app.workspace.setActiveLeaf(leaf, { focus: true });
@@ -827,7 +907,7 @@ class CanvasReferencesModal extends Modal {
         });
     }
 
-    tryZoomToNode(view, target, isId) {
+    tryZoomToNode(view: any, target: any, isId: boolean) {
         let attempts = 0;
         const maxAttempts = 30; 
 
@@ -872,7 +952,9 @@ class CanvasReferencesModal extends Modal {
 }
 
 class BreadcrumbSettingTab extends PluginSettingTab {
-    constructor(app, plugin) {
+    plugin: BreadcrumbPlugin;
+
+    constructor(app: App, plugin: BreadcrumbPlugin) {
         super(app, plugin);
         this.plugin = plugin;
     }
