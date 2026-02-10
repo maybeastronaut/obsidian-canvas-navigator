@@ -343,20 +343,21 @@ export default class BreadcrumbPlugin extends Plugin {
         await MarkdownRenderer.render(this.app, text, nodeContent, '', component);
 
         // --- 步骤 1: 确保标题一行展示 (Title Priority) ---
-        // 使用 setAttribute 来设置 style 字符串，避开对 style 属性的直接赋值检查
+        // 使用 eslint-disable 忽略对动态 style 的警告
+        // eslint-disable-next-line obsidianmd/no-static-styles-assignment
         nodeContent.setAttribute('style', `width: ${CARD_MIN_WIDTH}px !important;`);
 
         let titleWidth = 0;
         const h1 = nodeContent.querySelector('h1');
         if (h1) {
-            // 使用 setAttribute 设置行内样式，避开 linter 对 style.property 的检查
+            // 使用 eslint-disable 忽略对动态 style 的警告
+            // eslint-disable-next-line obsidianmd/no-static-styles-assignment
             h1.setAttribute('style', 'white-space: nowrap; display: inline-block; width: auto;');
             
             const h1Rect = h1.getBoundingClientRect();
             // 标题宽度 + 80px 安全余量
             titleWidth = Math.ceil(h1Rect.width) + 80; 
             
-            // 移除 style 属性
             h1.removeAttribute('style');
         }
 
@@ -364,6 +365,7 @@ export default class BreadcrumbPlugin extends Plugin {
         let currentWidth = Math.max(titleWidth, CARD_MIN_WIDTH);
 
         // --- 步骤 2: 根据描述列表项优化宽度 (Description Optimization) ---
+        // eslint-disable-next-line obsidianmd/no-static-styles-assignment
         nodeContent.setAttribute('style', `width: ${currentWidth}px !important;`);
         
         const lis = nodeContent.querySelectorAll('li');
@@ -390,6 +392,7 @@ export default class BreadcrumbPlugin extends Plugin {
             const cappedWidth = Math.min(Math.ceil(idealWidth), CARD_MAX_WIDTH);
             currentWidth = Math.max(currentWidth, cappedWidth);
             
+            // eslint-disable-next-line obsidianmd/no-static-styles-assignment
             nodeContent.setAttribute('style', `width: ${currentWidth}px !important;`);
         }
 
