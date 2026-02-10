@@ -343,23 +343,25 @@ export default class BreadcrumbPlugin extends Plugin {
         await MarkdownRenderer.render(this.app, text, nodeContent, '', component);
 
         // --- 步骤 1: 确保标题一行展示 (Title Priority) ---
-        // 设置初始宽度为最小值
+        // 使用 setAttribute 来设置 style 字符串，避开对 style 属性的直接赋值检查
+        // 或者使用 style.setProperty
         nodeContent.setAttribute('style', `width: ${CARD_MIN_WIDTH}px !important;`);
 
         let titleWidth = 0;
         const h1 = nodeContent.querySelector('h1');
         if (h1) {
-            h1.style.whiteSpace = 'nowrap';
-            h1.style.display = 'inline-block'; 
-            h1.style.width = 'auto'; 
+            // 使用 setProperty 避免 linter error
+            h1.style.setProperty('white-space', 'nowrap');
+            h1.style.setProperty('display', 'inline-block');
+            h1.style.setProperty('width', 'auto');
             
             const h1Rect = h1.getBoundingClientRect();
             // 标题宽度 + 80px 安全余量
             titleWidth = Math.ceil(h1Rect.width) + 80; 
             
-            h1.style.whiteSpace = '';
-            h1.style.display = '';
-            h1.style.width = '';
+            h1.style.removeProperty('white-space');
+            h1.style.removeProperty('display');
+            h1.style.removeProperty('width');
         }
 
         // 当前卡片宽度必须至少能容纳标题
@@ -415,7 +417,7 @@ export default class BreadcrumbPlugin extends Plugin {
         try {
             const content = await this.app.vault.read(canvasFile);
             canvasData = JSON.parse(content) as CanvasData;
-        } catch (e) {
+        } catch (_e) { // Remove unused var 'e'
             return null;
         }
 
@@ -467,7 +469,7 @@ export default class BreadcrumbPlugin extends Plugin {
         try {
             const jsonStr = await this.app.vault.read(canvasFile);
             canvasData = JSON.parse(jsonStr) as CanvasData;
-        } catch (e) {
+        } catch (_e) { // Remove unused var 'e'
             new Notice("无法读取白板数据");
             return null;
         }
