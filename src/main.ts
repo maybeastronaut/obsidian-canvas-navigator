@@ -344,24 +344,20 @@ export default class BreadcrumbPlugin extends Plugin {
 
         // --- 步骤 1: 确保标题一行展示 (Title Priority) ---
         // 使用 setAttribute 来设置 style 字符串，避开对 style 属性的直接赋值检查
-        // 或者使用 style.setProperty
         nodeContent.setAttribute('style', `width: ${CARD_MIN_WIDTH}px !important;`);
 
         let titleWidth = 0;
         const h1 = nodeContent.querySelector('h1');
         if (h1) {
-            // 使用 setProperty 避免 linter error
-            h1.style.setProperty('white-space', 'nowrap');
-            h1.style.setProperty('display', 'inline-block');
-            h1.style.setProperty('width', 'auto');
+            // 使用 setAttribute 设置行内样式，避开 linter 对 style.property 的检查
+            h1.setAttribute('style', 'white-space: nowrap; display: inline-block; width: auto;');
             
             const h1Rect = h1.getBoundingClientRect();
             // 标题宽度 + 80px 安全余量
             titleWidth = Math.ceil(h1Rect.width) + 80; 
             
-            h1.style.removeProperty('white-space');
-            h1.style.removeProperty('display');
-            h1.style.removeProperty('width');
+            // 移除 style 属性
+            h1.removeAttribute('style');
         }
 
         // 当前卡片宽度必须至少能容纳标题
@@ -417,7 +413,7 @@ export default class BreadcrumbPlugin extends Plugin {
         try {
             const content = await this.app.vault.read(canvasFile);
             canvasData = JSON.parse(content) as CanvasData;
-        } catch (_e) { // Remove unused var 'e'
+        } catch {
             return null;
         }
 
@@ -469,7 +465,7 @@ export default class BreadcrumbPlugin extends Plugin {
         try {
             const jsonStr = await this.app.vault.read(canvasFile);
             canvasData = JSON.parse(jsonStr) as CanvasData;
-        } catch (_e) { // Remove unused var 'e'
+        } catch {
             new Notice("无法读取白板数据");
             return null;
         }
