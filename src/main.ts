@@ -16,6 +16,10 @@ import {
     View
 } from 'obsidian';
 
+// --- 常量定义 ---
+const CARD_MIN_WIDTH = 260; // 卡片最小宽度 (px)
+const CARD_MAX_WIDTH = 800; // 描述文本撑开的最大宽度 (px) - 标题不受此限制
+
 // --- 接口定义 ---
 
 interface BreadcrumbSettings {
@@ -41,7 +45,6 @@ interface CanvasData {
     edges?: unknown[];
 }
 
-// 这是一个临时的接口，用于描述 Canvas View 的结构，避免使用 any
 interface CanvasView extends View {
     file: TFile | null;
     canvas: {
@@ -67,13 +70,11 @@ const DEFAULT_SETTINGS: BreadcrumbSettings = {
 };
 
 export default class BreadcrumbPlugin extends Plugin {
-    // Key: Canvas文件路径, Value: 该Canvas引用的所有文件路径集合 (Set)
     canvasIndex: Map<string, Set<string>> = new Map();
     settings: BreadcrumbSettings;
 
     async onload() {
         this.settings = Object.assign({}, DEFAULT_SETTINGS, (await this.loadData()) as BreadcrumbSettings);
-        // 样式注入已移除，改用 styles.css，Obsidian 会自动加载它
         this.addSettingTab(new BreadcrumbSettingTab(this.app, this));
 
         this.registerEvent(this.app.workspace.on('file-open', () => this.updateAllViews()));
@@ -81,8 +82,6 @@ export default class BreadcrumbPlugin extends Plugin {
         
         this.app.workspace.onLayoutReady(() => {
             this.updateAllViews();
-            
-            // 延迟启动索引构建
             setTimeout(() => {
                 void this.buildCanvasIndex();
             }, 2000);
@@ -92,18 +91,17 @@ export default class BreadcrumbPlugin extends Plugin {
         
         this.addCommand({
             id: 'toggle-breadcrumb-nav',
-            name: 'Toggle/refresh breadcrumb nav', // Sentence case
+            name: 'Toggle/refresh breadcrumb nav',
             callback: () => this.updateAllViews()
         });
 
         this.addCommand({
             id: 'check-canvas-references',
-            name: 'Check canvas references (existing & potential)', // Sentence case
+            name: 'Check canvas references (existing & potential)',
             checkCallback: (checking: boolean) => {
                 const activeFile = this.app.workspace.getActiveFile();
                 if (!activeFile) return false;
                 if (checking) return true;
-                // 显式 void 忽略 promise
                 void this.scanCanvasFiles(activeFile);
                 return true; 
             }
@@ -160,7 +158,6 @@ export default class BreadcrumbPlugin extends Plugin {
             }
         }
         
-        // Console.log 替换为 debug，此处保留用于调试
         console.debug(`[BreadcrumbPlugin] Indexed ${processed} canvas files in ${Date.now() - start}ms`);
     }
 
@@ -295,51 +292,122 @@ export default class BreadcrumbPlugin extends Plugin {
     }
 
     async extractNodeText(file: TFile): Promise<string> {
-        const content = await this.app.vault.read(file);
-        const descKeyword = "description:";
-        const descIndex = content.indexOf(descKeyword);
-        
-        if (descIndex === -1) {
-            return `# [[${file.basename}]]\n\n`;
-        }
-
-        const startIdx = descIndex + descKeyword.length;
-        const textAfter = content.substring(startIdx);
-        const endMatch = textAfter.match(/\n---/); 
-        
+        // 1. 优先尝试从 Obsidian 的元数据缓存中读取
+        const cache = this.app.metadataCache.getFileCache(file);
         let descContent = "";
-        if (endMatch) {
-            descContent = textAfter.substring(0, endMatch.index).trim();
+
+        if (cache?.frontmatter && typeof cache.frontmatter['description'] === 'string') {
+            descContent = cache.frontmatter['description'];
         } else {
-            descContent = textAfter.trim();
+            // 2. 正则后备提取
+            const content = await this.app.vault.read(file);
+            const match = content.match(/^\s*description\s*[:：]/im);
+            
+            if (match && match.index !== undefined) {
+                const startIdx = match.index + match[0].length;
+                const textAfter = content.substring(startIdx);
+                const endMatch = textAfter.match(/(\n---|^\s*$|\n#)/m); 
+                
+                if (endMatch && endMatch.index !== undefined) {
+                    descContent = textAfter.substring(0, endMatch.index).trim();
+                } else {
+                    descContent = textAfter.trim();
+                }
+
+                if (!descContent && textAfter.startsWith('\n')) {
+                     const nextContent = textAfter.trimStart();
+                     const nextEndMatch = nextContent.match(/(\n---|^\s*$|\n#)/m);
+                     if (nextEndMatch && nextEndMatch.index !== undefined) {
+                         descContent = nextContent.substring(0, nextEndMatch.index).trim();
+                     } else {
+                         descContent = nextContent.trim();
+                     }
+                }
+            }
         }
 
+        // [回退] 恢复标准 Markdown 标题格式
         return `# [[${file.basename}]]\n\n${descContent}`;
     }
 
+    // --- 动态尺寸测量 ---
     async measureTextPrecisely(text: string): Promise<{width: number, height: number}> {
         const wrapper = document.body.createDiv();
-        // 使用 CSS 类替代内联样式，类名在 styles.css 中定义
         wrapper.addClass('canvas-measure-wrapper');
 
-        const cardWidth = 400; 
-        
         const nodeContent = wrapper.createDiv({
             cls: 'canvas-node-content markdown-preview-view canvas-measure-content'
         });
         
-        // 动态宽度仍需 JS 设置，但尽量少用内联样式
-        nodeContent.style.width = `${cardWidth}px`;
-
         const component = new Component();
         await MarkdownRenderer.render(this.app, text, nodeContent, '', component);
 
-        const height = nodeContent.scrollHeight;
+        // --- 步骤 1: 确保标题一行展示 (Title Priority) ---
+        // 设置初始宽度为最小值
+        nodeContent.setAttribute('style', `width: ${CARD_MIN_WIDTH}px !important;`);
+
+        let titleWidth = 0;
+        const h1 = nodeContent.querySelector('h1');
+        if (h1) {
+            h1.style.whiteSpace = 'nowrap';
+            h1.style.display = 'inline-block'; 
+            h1.style.width = 'auto'; 
+            
+            const h1Rect = h1.getBoundingClientRect();
+            // 标题宽度 + 80px 安全余量
+            titleWidth = Math.ceil(h1Rect.width) + 80; 
+            
+            h1.style.whiteSpace = '';
+            h1.style.display = '';
+            h1.style.width = '';
+        }
+
+        // 当前卡片宽度必须至少能容纳标题
+        let currentWidth = Math.max(titleWidth, CARD_MIN_WIDTH);
+
+        // --- 步骤 2: 根据描述列表项优化宽度 (Description Optimization) ---
+        nodeContent.setAttribute('style', `width: ${currentWidth}px !important;`);
+        
+        const lis = nodeContent.querySelectorAll('li');
+        let maxLines = 0;
+
+        for (let i = 0; i < lis.length; i++) {
+            const li = lis[i];
+            if (!li) continue;
+
+            const style = window.getComputedStyle(li);
+            let lineHeight = parseFloat(style.lineHeight);
+            if (isNaN(lineHeight)) {
+                const fontSize = parseFloat(style.fontSize) || 16;
+                lineHeight = fontSize * 1.5; 
+            }
+            
+            const lines = li.offsetHeight / lineHeight;
+            if (lines > maxLines) maxLines = lines;
+        }
+
+        if (maxLines > 2.1) {
+            const idealWidth = currentWidth * (maxLines / 2) * 1.05;
+            // 限制最大宽度
+            const cappedWidth = Math.min(Math.ceil(idealWidth), CARD_MAX_WIDTH);
+            currentWidth = Math.max(currentWidth, cappedWidth);
+            
+            nodeContent.setAttribute('style', `width: ${currentWidth}px !important;`);
+        }
+
+        // --- 步骤 3: 最终高度测量 ---
+        const rect = nodeContent.getBoundingClientRect();
+        
+        const finalWidth = Math.ceil(rect.width);
+        const finalHeight = Math.ceil(rect.height);
         
         component.unload();
         wrapper.remove();
 
-        return { width: cardWidth, height: height + 4 };
+        return { 
+            width: finalWidth, 
+            height: finalHeight 
+        };
     }
 
     async syncNodeInCanvas(canvasFile: TFile, noteFile: TFile): Promise<string | null> {
@@ -362,7 +430,8 @@ export default class BreadcrumbPlugin extends Plugin {
         const { width, height } = await this.measureTextPrecisely(textContent);
 
         for (const node of canvasData.nodes) {
-            if (node.type === 'text' && node.text && node.text.includes(targetLink)) {
+            // [回退] 恢复基于 text 内容包含链接的查找逻辑
+            if (node.type === 'text' && typeof node.text === 'string' && node.text.includes(targetLink)) {
                 
                 const isContentDiff = node.text !== textContent;
                 const isSizeDiff = Math.abs((node.width || 0) - width) > 2 || Math.abs((node.height || 0) - height) > 2;
@@ -410,7 +479,8 @@ export default class BreadcrumbPlugin extends Plugin {
         
         for (const node of canvasData.nodes) {
             if (node.type === 'file' && node.file === targetPath) return node.id;
-            if (node.type === 'text' && node.text && node.text.includes(targetLink)) return node.id;
+            // [回退] 恢复基于 text 内容的查重
+            if (node.type === 'text' && typeof node.text === 'string' && node.text.includes(targetLink)) return node.id;
         }
 
         const textContent = await this.extractNodeText(noteFile);
@@ -659,11 +729,9 @@ class CanvasReferencesModal extends Modal {
             
             const iconBox = item.createDiv({ cls: 'canvas-ref-icon' });
             
-            // 使用 Obsidian 的 setIcon 替代 innerHTML，避免 unsafe-call 和 innerHTML 警告
             if (type === 'potential') {
                 setIcon(iconBox, 'circle-dashed'); 
                 iconBox.title = "未引用 (点击添加)";
-                // 修复：移除 setAttribute，改用 CSS 类 (potential-ref)
                 iconBox.addClass('potential-ref'); 
             } else {
                 setIcon(iconBox, 'box-select'); 
@@ -687,7 +755,6 @@ class CanvasReferencesModal extends Modal {
                         targetId = await this.plugin.addToCanvas(file, this.targetFile);
                     }
 
-                    // 使用自定义的 CanvasView 接口来避免 any 报错
                     const leaf = this.app.workspace.getLeavesOfType('canvas').find((l: WorkspaceLeaf) => {
                         const v = l.view as CanvasView;
                         return v.file && v.file.path === file.path;
@@ -723,7 +790,6 @@ class CanvasReferencesModal extends Modal {
 
         const poll = setInterval(() => {
             attempts++;
-            // 使用自定义接口访问 canvas 属性
             const canvas = view.canvas;
             if (!canvas) return;
 
@@ -774,7 +840,7 @@ class BreadcrumbSettingTab extends PluginSettingTab {
         containerEl.empty();
 
         new Setting(containerEl)
-            .setName('Enable navigation bar') // Sentence case
+            .setName('Enable navigation bar')
             .setDesc('Show breadcrumbs and prev/next buttons at the top of the note.')
             .addToggle(t => t.setValue(this.plugin.settings.enableNav).onChange(async v => {
                 this.plugin.settings.enableNav = v;
