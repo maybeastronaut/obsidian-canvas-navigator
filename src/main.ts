@@ -18,7 +18,7 @@ import {
 
 // --- 常量定义 ---
 const CARD_MIN_WIDTH = 260; // 卡片最小宽度 (px)
-const CARD_MAX_WIDTH = 800; // 描述文本撑开的最大宽度 (px) - 标题不受此限制
+const CARD_MAX_WIDTH = 1200; // 扩大最大宽度以支持文本量极大时生成大面积的正方形
 
 // --- 接口定义 ---
 
@@ -31,6 +31,7 @@ interface CanvasNode {
     type: string;
     text?: string;
     file?: string;
+    label?: string; // 为 Group 节点增加 label 属性
     x: number;
     y: number;
     width: number;
@@ -89,22 +90,34 @@ export default class BreadcrumbPlugin extends Plugin {
 
         this.setupIndexListeners();
         
+        // 智能命令：根据当前活跃文件类型执行不同逻辑
+        this.addCommand({
+            id: 'check-canvas-references',
+            name: 'Check canvas references / Adjust groups in canvas',
+            checkCallback: (checking: boolean) => {
+                const activeFile = this.app.workspace.getActiveFile();
+                if (!activeFile) return false;
+                
+                if (activeFile.extension === 'canvas') {
+                    if (checking) return true;
+                    // 白板内执行：调整 Group 边框
+                    void this.adjustGroupsInCanvas(activeFile);
+                    return true;
+                } else if (activeFile.extension === 'md') {
+                    if (checking) return true;
+                    // 笔记内执行：检查引用并添加卡片
+                    void this.scanCanvasFiles(activeFile);
+                    return true; 
+                }
+                
+                return false;
+            }
+        });
+
         this.addCommand({
             id: 'toggle-breadcrumb-nav',
             name: 'Toggle/refresh breadcrumb nav',
             callback: () => this.updateAllViews()
-        });
-
-        this.addCommand({
-            id: 'check-canvas-references',
-            name: 'Check canvas references (existing & potential)',
-            checkCallback: (checking: boolean) => {
-                const activeFile = this.app.workspace.getActiveFile();
-                if (!activeFile) return false;
-                if (checking) return true;
-                void this.scanCanvasFiles(activeFile);
-                return true; 
-            }
         });
     }
 
@@ -326,14 +339,17 @@ export default class BreadcrumbPlugin extends Plugin {
             }
         }
 
-        // [回退] 恢复标准 Markdown 标题格式
-        return `# [[${file.basename}]]\n\n${descContent}`;
+        // 【修改 1】：去除标题前缀并以别名显示 (例如：# [[00.04.02 函数中的变量|函数中的变量]])
+        const cleanedTitle = this.cleanName(file.basename);
+        return `# [[${file.basename}|${cleanedTitle}]]\n\n${descContent}`;
     }
 
-    // --- 动态尺寸测量 ---
+    // --- 动态尺寸测量（仅在创建卡片时调用） ---
     async measureTextPrecisely(text: string): Promise<{width: number, height: number}> {
         const wrapper = document.body.createDiv();
         wrapper.addClass('canvas-measure-wrapper');
+        // eslint-disable-next-line obsidianmd/no-static-styles-assignment
+        wrapper.setAttribute('style', 'position: absolute; top: -9999px; left: -9999px; visibility: hidden; z-index: -1;');
 
         const nodeContent = wrapper.createDiv({
             cls: 'canvas-node-content markdown-preview-view canvas-measure-content'
@@ -342,73 +358,64 @@ export default class BreadcrumbPlugin extends Plugin {
         const component = new Component();
         await MarkdownRenderer.render(this.app, text, nodeContent, '', component);
 
-        // --- 步骤 1: 确保标题一行展示 (Title Priority) ---
-        // 使用 eslint-disable 忽略对动态 style 的警告
         // eslint-disable-next-line obsidianmd/no-static-styles-assignment
         nodeContent.setAttribute('style', `width: ${CARD_MIN_WIDTH}px !important;`);
 
         let titleWidth = 0;
         const h1 = nodeContent.querySelector('h1');
         if (h1) {
-            // 使用 eslint-disable 忽略对动态 style 的警告
             // eslint-disable-next-line obsidianmd/no-static-styles-assignment
             h1.setAttribute('style', 'white-space: nowrap; display: inline-block; width: auto;');
-            
             const h1Rect = h1.getBoundingClientRect();
-            // 标题宽度 + 80px 安全余量
             titleWidth = Math.ceil(h1Rect.width) + 80; 
-            
             h1.removeAttribute('style');
         }
 
-        // 当前卡片宽度必须至少能容纳标题
-        let currentWidth = Math.max(titleWidth, CARD_MIN_WIDTH);
+        const minW = Math.max(CARD_MIN_WIDTH, titleWidth);
+        const maxW = Math.max(CARD_MAX_WIDTH, minW * 2);
 
-        // --- 步骤 2: 根据描述列表项优化宽度 (Description Optimization) ---
-        // eslint-disable-next-line obsidianmd/no-static-styles-assignment
-        nodeContent.setAttribute('style', `width: ${currentWidth}px !important;`);
-        
-        const lis = nodeContent.querySelectorAll('li');
-        let maxLines = 0;
+        let low = minW;
+        let high = maxW;
+        let bestWidth = minW;
+        let bestDiff = Infinity;
 
-        for (let i = 0; i < lis.length; i++) {
-            const li = lis[i];
-            if (!li) continue;
-
-            const style = window.getComputedStyle(li);
-            let lineHeight = parseFloat(style.lineHeight);
-            if (isNaN(lineHeight)) {
-                const fontSize = parseFloat(style.fontSize) || 16;
-                lineHeight = fontSize * 1.5; 
-            }
-            
-            const lines = li.offsetHeight / lineHeight;
-            if (lines > maxLines) maxLines = lines;
-        }
-
-        if (maxLines > 2.1) {
-            const idealWidth = currentWidth * (maxLines / 2) * 1.05;
-            // 限制最大宽度
-            const cappedWidth = Math.min(Math.ceil(idealWidth), CARD_MAX_WIDTH);
-            currentWidth = Math.max(currentWidth, cappedWidth);
-            
+        for (let i = 0; i < 10; i++) {
+            const mid = Math.floor((low + high) / 2);
             // eslint-disable-next-line obsidianmd/no-static-styles-assignment
-            nodeContent.setAttribute('style', `width: ${currentWidth}px !important;`);
+            nodeContent.setAttribute('style', `width: ${mid}px !important;`);
+            
+            const rect = nodeContent.getBoundingClientRect();
+            const h = Math.ceil(rect.height);
+            const diff = Math.abs(mid - h);
+
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestWidth = mid;
+            }
+
+            if (mid < h) {
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
         }
 
-        // --- 步骤 3: 最终高度测量 ---
-        const rect = nodeContent.getBoundingClientRect();
+        // eslint-disable-next-line obsidianmd/no-static-styles-assignment
+        nodeContent.setAttribute('style', `width: ${bestWidth}px !important;`);
+        const finalRect = nodeContent.getBoundingClientRect();
         
-        const finalWidth = Math.ceil(rect.width);
-        const finalHeight = Math.ceil(rect.height);
+        let finalWidth = Math.ceil(finalRect.width);
+        let finalHeight = Math.ceil(finalRect.height);
         
         component.unload();
         wrapper.remove();
 
-        return { 
-            width: finalWidth, 
-            height: finalHeight 
-        };
+        finalWidth += 40;
+        finalHeight += 50;
+
+        const squareSide = Math.max(finalWidth, finalHeight);
+
+        return { width: squareSide, height: squareSide };
     }
 
     async syncNodeInCanvas(canvasFile: TFile, noteFile: TFile): Promise<string | null> {
@@ -425,25 +432,24 @@ export default class BreadcrumbPlugin extends Plugin {
         const targetPath = noteFile.path;
         const targetLink = `[[${noteFile.basename}`;
         let updated = false;
+        
         let targetNodeId: string | null = null;
+        let targetNode: CanvasNode | null = null;
 
         const textContent = await this.extractNodeText(noteFile);
-        const { width, height } = await this.measureTextPrecisely(textContent);
 
         for (const node of canvasData.nodes) {
-            // [回退] 恢复基于 text 内容包含链接的查找逻辑
+            // 仅更新文本内容，不涉及尺寸调整
             if (node.type === 'text' && typeof node.text === 'string' && node.text.includes(targetLink)) {
                 
                 const isContentDiff = node.text !== textContent;
-                const isSizeDiff = Math.abs((node.width || 0) - width) > 2 || Math.abs((node.height || 0) - height) > 2;
 
-                if (isContentDiff || isSizeDiff) {
+                if (isContentDiff) {
                     node.text = textContent;
-                    node.width = width;
-                    node.height = height;
                     updated = true;
                 }
                 targetNodeId = node.id;
+                targetNode = node;
             }
         }
 
@@ -451,9 +457,31 @@ export default class BreadcrumbPlugin extends Plugin {
              for (const node of canvasData.nodes) {
                 if (node.type === 'file' && node.file === targetPath) {
                     targetNodeId = node.id;
+                    targetNode = node;
                     break;
                 }
              }
+        }
+
+        // 【修改 3】：补充缺失的 Group（如果跳转到白板卡片，发现只有卡片没有 Group，自动创建）
+        if (targetNode) {
+            const hasGroup = canvasData.nodes.some(n => n.type === 'group' && n.label === noteFile.basename);
+            if (!hasGroup) {
+                const groupId = Math.random().toString(36).substring(2, 15);
+                const newGroup: CanvasNode = {
+                    id: groupId,
+                    type: "group",
+                    label: noteFile.basename, // Group 名字与文件名保持一致
+                    x: targetNode.x,          // 严格保持一致
+                    y: targetNode.y,
+                    width: targetNode.width,
+                    height: targetNode.height
+                };
+                
+                // 插入到数组最前端，确保渲染时处于底层背景
+                canvasData.nodes.unshift(newGroup);
+                updated = true;
+            }
         }
 
         if (updated) {
@@ -480,7 +508,6 @@ export default class BreadcrumbPlugin extends Plugin {
         
         for (const node of canvasData.nodes) {
             if (node.type === 'file' && node.file === targetPath) return node.id;
-            // [回退] 恢复基于 text 内容的查重
             if (node.type === 'text' && typeof node.text === 'string' && node.text.includes(targetLink)) return node.id;
         }
 
@@ -511,10 +538,96 @@ export default class BreadcrumbPlugin extends Plugin {
             height: height  
         };
 
+        // 【修改 2】：同时生成恰好包围该卡片的 Group，名字完全一致，长宽严格一致
+        const groupId = Math.random().toString(36).substring(2, 15);
+        const newGroup: CanvasNode = {
+            id: groupId,
+            type: "group",
+            label: noteFile.basename,
+            x: newNode.x,
+            y: newNode.y,
+            width: newNode.width,
+            height: newNode.height
+        };
+
+        // 先把 group 推入数组，让它处于底层，避免挡住文本节点
+        canvasData.nodes.push(newGroup);
         canvasData.nodes.push(newNode);
+
         await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, "\t"));
         
         return newNodeId; 
+    }
+
+    // 在白板中调整 Group 使其严格包围对应卡片
+    async adjustGroupsInCanvas(canvasFile: TFile) {
+        try {
+            const content = await this.app.vault.read(canvasFile);
+            const canvasData = JSON.parse(content) as CanvasData;
+            if (!canvasData.nodes) return;
+
+            let updated = false;
+
+            const groups = canvasData.nodes.filter(n => n.type === 'group');
+            const nonGroups = canvasData.nodes.filter(n => n.type !== 'group');
+
+            for (const group of groups) {
+                // 判断当前 group 的范围内，包含了多少个其他卡片 (基于中心点判断)
+                const nodesInside = nonGroups.filter(n => {
+                    const cx = n.x + n.width / 2;
+                    const cy = n.y + n.height / 2;
+                    return cx >= group.x && cx <= group.x + group.width &&
+                           cy >= group.y && cy <= group.y + group.height;
+                });
+
+                // 如果 group 包含了一个以上卡片，则不必调整
+                if (nodesInside.length > 1) continue;
+
+                if (!group.label) continue;
+                
+                // 查找 group 对应的目标卡片
+                const targetNode = canvasData.nodes.find(n => {
+                    if (n.type === 'file' && typeof n.file === 'string') {
+                        const basename = n.file.split('/').pop()?.replace(/\.md$/, '');
+                        return basename === group.label;
+                    }
+                    if (n.type === 'text' && typeof n.text === 'string') {
+                        // 包含链接的文本即判定为对应卡片
+                        return n.text.includes(`[[${group.label}]]`) || 
+                               n.text.includes(`[[${group.label}|`) || 
+                               n.text.includes(`# [[${group.label}]]`);
+                    }
+                    return false;
+                });
+
+                if (targetNode) {
+                    // 【修改 2】：取消全部偏移（Padding），使其长宽完全保持一致
+                    const newX = targetNode.x;
+                    const newY = targetNode.y;
+                    const newW = targetNode.width;
+                    const newH = targetNode.height;
+
+                    if (group.x !== newX || group.y !== newY || group.width !== newW || group.height !== newH) {
+                        group.x = newX;
+                        group.y = newY;
+                        group.width = newW;
+                        group.height = newH;
+                        updated = true;
+                    }
+                }
+            }
+
+            if (updated) {
+                await this.app.vault.modify(canvasFile, JSON.stringify(canvasData, null, "\t"));
+                new Notice("已调整白板中的 Group 尺寸与对应卡片完全对齐");
+            } else {
+                new Notice("没有需要调整的 Group");
+            }
+
+        } catch (error) {
+            console.error(error);
+            new Notice("调整 Group 失败");
+        }
     }
 
     updateAllViews() {
