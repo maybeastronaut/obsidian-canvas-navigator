@@ -2,6 +2,13 @@ import tseslint from 'typescript-eslint';
 import obsidianmd from "eslint-plugin-obsidianmd";
 import globals from "globals";
 import { globalIgnores } from "eslint/config";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const tsconfigRootDir = dirname(fileURLToPath(import.meta.url));
+const obsidianRecommendedConfigs = [
+	...((obsidianmd.configs?.recommended ?? []) as Iterable<any>),
+];
 
 export default tseslint.config(
 	{
@@ -12,16 +19,16 @@ export default tseslint.config(
 			parserOptions: {
 				projectService: {
 					allowDefaultProject: [
-						'eslint.config.js',
+						'eslint.config.mts',
 						'manifest.json'
 					]
 				},
-				tsconfigRootDir: import.meta.dirname,
+				tsconfigRootDir,
 				extraFileExtensions: ['.json']
 			},
 		},
 	},
-	...obsidianmd.configs.recommended,
+	...obsidianRecommendedConfigs,
 	globalIgnores([
 		"node_modules",
 		"dist",

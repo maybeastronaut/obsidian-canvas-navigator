@@ -1,0 +1,12 @@
+This project includes code derived from:
+
+  obsidian-advanced-canvas
+  https://github.com/Developer-Mike/obsidian-advanced-canvas
+  License: GNU General Public License v3.0
+
+The strict square routing implementation in:
+
+  src/features/canvas/squarePathRouter.ts
+  src/features/canvas/canvasSquareRenderService.ts
+
+is adapted from Advanced Canvas square pathfinding logic and integration ideas.
